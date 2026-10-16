@@ -1,59 +1,68 @@
 #!/bin/bash
-#Steam Deck Auto Disable Steam Controller by scawp
-#License: DBAD: https://github.com/scawp/Steam-Deck.Auto-Disable-Steam-Controller/blob/main/LICENSE.md
-#Source: https://github.com/scawp/Steam-Deck.Auto-Disable-Steam-Controller
-# Use at own Risk!
+# Steam Deck Auto Disable Steam Controller - überarbeitete Version
+# Basis: https://github.com/scawp/Steam-Deck.Auto-Disable-Steam-Controller (DBAD-Lizenz)
+#
+# Aufruf durch udev:  disable_steam_input.sh <disable|enable> <kernelname> <PRODUCT> [NAME...]
+# NAME steht bewusst ganz hinten, weil er Leerzeichen enthalten kann und sonst die
+# Argument-Positionen verschiebt (das war der "bad escaping"-Bug im Original).
 
-set -e
+set -u
 
-#script_install_dir="/home/deck/.local/share/scawp/SDADSC"
-tmp_dir="/tmp/scawp/SDADSC"
+tmp_dir="${SDADSC_TMP:-/tmp/scawp/SDADSC}"
+usb_drv="${SDADSC_USB_DRV:-/sys/bus/usb/drivers/usbhid}"
+# USB-Interfaces der eingebauten Deck-Controls (wie im Original)
+deck_ifaces=("3-3:1.0" "3-3:1.1" "3-3:1.2")
 
 mkdir -p "$tmp_dir"
+log="$tmp_dir/debug.log"
+id_file="$tmp_dir/controller_id.txt"
 
-#log debug info, deletes on reboot
-echo -e "\n$1 - $2 - $3 - $4 - $5" >> "$tmp_dir/debug.log"
+action="${1:-}"
+kname="${2:-}"
+product="${3:-}"
+name="${*:4}"
 
-#TODO should be $5, bad escaping in rules
-if [ "$4" = "3/28de/11ff/1" ];then
-  #Steam converts all inputs to virtual 360 pads with this id (I hope!), exit and  ignore.
-    echo "VIRTUAL 360 Pad!!!" >> "$tmp_dir/debug.log"
-exit 0;
-fi
+echo "$(date +%T) action=$action kernel=$kname product=$product name=$name" >> "$log"
 
-#TODO check if all Steam Decks identify as Product 3/28de/1205/111
-#Match any version of Deck Controls ref: https://github.com/scawp/Steam-Deck.Auto-Disable-Steam-Controller/issues/10#issuecomment-2036096703
-if [[ "$5" = "3/28de/1205/"* ]];then
-  #Steam Deck Built-in Controllers, exit and ignore
-  echo "STEAM DECK!!!" >> "$tmp_dir/debug.log"
-exit 0;
-fi
+# --- Geräte ignorieren, die nicht "extern" sind ---------------------------------
+case "$product" in
+  3/28de/1205/*) echo "  -> Steam Deck Built-in, ignoriert" >> "$log"; exit 0 ;;
+  3/28de/11ff/*) echo "  -> Steam Virtual 360 Pad, ignoriert" >> "$log"; exit 0 ;;
+  11/1/1/ab83)   echo "  -> Steam Deck Virtual Keyboard, ignoriert" >> "$log"; exit 0 ;;
+esac
 
-#TODO check if all Steam Deck Virtual Keyboards identify as Product 11/1/1/ab83
-if [ "$4" = "11/1/1/ab83" ];then
-  #Steam registers a Virtual Keyboard \"AT Translated Set 2 keyboard\", exit and ignore.
-  echo "STEAM DECK VIRTUAL KEYBOARD!!!" >> "$tmp_dir/debug.log"
-exit 0;
-fi
+[ -z "$kname" ] && exit 0
 
-if [ "$1" = "disable" ];then
-  if [ ! -f "$tmp_dir/controller_id.txt" ];then
-    echo "3-3:1.0" > /sys/bus/usb/drivers/usbhid/unbind
-    echo "3-3:1.1" > /sys/bus/usb/drivers/usbhid/unbind
-    echo "3-3:1.2" > /sys/bus/usb/drivers/usbhid/unbind
+deck_ctl() { # $1 = bind | unbind
+  local i
+  for i in "${deck_ifaces[@]}"; do
+    echo "$i" > "$usb_drv/$1" 2>>"$log" || true
+  done
+}
+
+# Mehrere udev-Events laufen parallel (ein BT-Gerät erzeugt oft mehrere input-Nodes)
+exec 9>"$tmp_dir/lock"
+flock 9
+
+if [ "$action" = "disable" ]; then
+  first=0
+  [ -s "$id_file" ] || first=1
+  grep -qxF "$kname" "$id_file" 2>/dev/null || echo "$kname" >> "$id_file"
+  if [ "$first" = 1 ]; then
+    echo "  -> Deck-Controls AUS" >> "$log"
+    deck_ctl unbind
   fi
-  echo "$2" >> "$tmp_dir/controller_id.txt"
 
-elif [ "$1" = "enable" ] && [ -f "$tmp_dir/controller_id.txt" ] && [ -n "$(grep -i "^$2$" "$tmp_dir/controller_id.txt")" ];then
-  sed -i "/^$2$/d" "$tmp_dir/controller_id.txt"
-
-  if [ ! -s "$tmp_dir/controller_id.txt" ];then
-    echo "Re-enabling Deck Controls!!!" >> "$tmp_dir/debug.log"
-    rm "$tmp_dir/controller_id.txt"
-    echo "3-3:1.0" > /sys/bus/usb/drivers/usbhid/bind
-    echo "3-3:1.1" > /sys/bus/usb/drivers/usbhid/bind
-    echo "3-3:1.2" > /sys/bus/usb/drivers/usbhid/bind
+elif [ "$action" = "enable" ]; then
+  if [ -s "$id_file" ] && grep -qxF "$kname" "$id_file"; then
+    grep -vxF "$kname" "$id_file" > "$id_file.new" || true
+    mv "$id_file.new" "$id_file"
+    if [ ! -s "$id_file" ]; then
+      echo "  -> Deck-Controls AN" >> "$log"
+      rm -f "$id_file"
+      deck_ctl bind
+    fi
   fi
 fi
 
-exit 0;
+exit 0
