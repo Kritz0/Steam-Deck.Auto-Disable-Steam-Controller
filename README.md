@@ -54,7 +54,7 @@ The script can also been configure to work with External Mouse & Keyboards both 
 
 ## Via Curl (One Line Install)
 
-In Konsole type `curl -sSL https://raw.githubusercontent.com/scawp/Steam-Deck.Auto-Disable-Steam-Controller/main/curl_install.sh | bash`
+In Konsole type `curl -sSL https://raw.githubusercontent.com/Kritz0/Steam-Deck.Auto-Disable-Steam-Controller/main/curl_install.sh | bash`
 
 a `sudo` password is required (run `passwd` if required first)
 
